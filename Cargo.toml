@@ -1,0 +1,26 @@
+[package]
+name = "bills-backend"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+axum = "0.8.1"
+hyper = "1"
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12.15", features = ["json", "gzip", "stream"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2.0.12"
+dotenvy = "0.15"
+quick-xml = { version = "0.37.3", features = ["serialize"] }
+base64 = "0.22.1"
+uuid = { version = "1", features = ["v4"] }
+tower = "0.5.2"
+
+[lib]
+name = "bills_backend"
+path = "src/lib.rs"

@@ -3,7 +3,7 @@ mod services;
 mod models;
 mod utils;
 
-use axum::{Router};
+use axum::Router;
 use routes::airtime::airtime_routes; 
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -11,7 +11,8 @@ use tracing_subscriber;
 use dotenvy::dotenv;
 use routes::dstv::dstv_routes;
 use routes::bluecode::bluecode_routes;
-
+use tower_http::cors::{CorsLayer, Any};
+use axum::http::{Method, header};
 
 
 
@@ -26,10 +27,19 @@ async fn main() {
         .init();
 
     // Set up the routes
-    let app = Router::new()
-        .nest("/airtime", airtime_routes()) // Ensure this is correctly nested
-        .nest("/dstv", dstv_routes())
-        .nest("/bluecode", bluecode_routes());
+    use tower_http::cors::{CorsLayer, Any};
+use axum::http::{Method, header};
+
+let cors = CorsLayer::new()
+    .allow_origin(Any)
+    .allow_methods([Method::GET, Method::POST])
+    .allow_headers([header::CONTENT_TYPE]);
+
+let app = Router::new()
+    .nest("/airtime", airtime_routes())
+    .nest("/dstv", dstv_routes())
+    .nest("/bluecode", bluecode_routes())
+    .layer(cors);
         
 
     // Define the server address

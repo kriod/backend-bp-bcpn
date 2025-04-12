@@ -1,17 +1,18 @@
-use axum::{Router, body::Body, http::{Request, StatusCode}};
-use axum::routing::{post, get};
-use tower::ServiceExt; // for `oneshot`
+use axum::body::to_bytes;
+use axum::routing::{get, post};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+    Router,
+};
 use bills_backend::routes::bluecode::callback_handler;
 use bills_backend::routes::dstv::requery_handler;
 use serde_json::json;
-use axum::body::to_bytes;
-
-
+use tower::ServiceExt; // for `oneshot`
 
 #[tokio::test]
 async fn test_bluecode_callback_handler() {
-    let app = Router::new()
-        .route("/bluecode/callback", post(callback_handler));
+    let app = Router::new().route("/bluecode/callback", post(callback_handler));
 
     let payload = json!({
         "result": "OK",
@@ -32,11 +33,9 @@ async fn test_bluecode_callback_handler() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-
 #[tokio::test]
 async fn test_requery_handler_stubbed() {
-    let app = Router::new()
-        .route("/dstv/requery/{merchant_tx_id}", get(requery_handler));
+    let app = Router::new().route("/dstv/requery/{merchant_tx_id}", get(requery_handler));
 
     let request = Request::builder()
         .method("GET")

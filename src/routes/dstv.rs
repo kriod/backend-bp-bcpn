@@ -1,27 +1,69 @@
+// src/routes/dstv.rs
 use crate::models::bluecode::{
     BluecodeRegisterRequest, BluecodeRegisterResponse, PaymentInitRequest,
 };
-use crate::models::dstv::{DstvLookupRequest, DstvLookupResponse};
-use crate::models::bluecode::{BluecodeStatusResponseWrapper, BluecodeStatusResponse};
-use crate::services::bluecode::requery_transaction;
-use crate::services::bluecode::initiate_qr_payment;
-use crate::services::dstv::lookup_dstv_account;
+use crate::models::bluecode::{BluecodeStatusResponse, BluecodeStatusResponseWrapper};
+use crate::models::dstv::{DstvConfirmPaymentRequest, DstvLookupRequest, DstvLookupResponse};
+use crate::services::bluecode::{initiate_qr_payment, requery_transaction};
+use crate::services::dstv::{confirm_dstv_payment, lookup_dstv_account};
 use axum::response::IntoResponse;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use axum::routing::{post, get};
-
-
+use serde::Serialize;
+use sqlx::PgPool;
 use std::env;
 use uuid::Uuid;
 
-pub fn dstv_routes() -> Router {
+#[derive(Debug, Serialize)]
+struct DstvConfirmPaymentResponse {
+    success: bool,
+    raw_xml: Option<String>,
+    message: Option<String>,
+}
+
+pub fn dstv_routes(pool: PgPool) -> Router<PgPool> {
     Router::new()
         .route("/lookup", post(lookup_handler))
         .route("/initiate-payment", post(initiate_payment))
         .route("/requery/{merchant_tx_id}", get(requery_handler))
-
+        .route("/confirm-payment", post(confirm_payment_handler))
+        .with_state(pool)
 }
 
+pub async fn confirm_payment_handler(
+    Json(body): Json<DstvConfirmPaymentRequest>,
+) -> impl IntoResponse {
+    tracing::info!(?body, "📥 Received DSTV confirm-payment request");
+    tracing::info!("🛰 Confirming with: {:?}", body);
+
+    match confirm_dstv_payment(
+        body.merchant_reference.clone(),
+        body.customer_id.clone(),
+        body.basket_id.clone(),
+        body.amount,
+    )
+    .await
+    {
+        Ok(xml_response) => {
+            tracing::info!("✅ DSTV confirmation success");
+            axum::Json(DstvConfirmPaymentResponse {
+                success: true,
+                raw_xml: Some(xml_response),
+                message: Some("Payment confirmed successfully".to_string()),
+            })
+            .into_response()
+        }
+        Err(err) => {
+            tracing::error!(?err, "❌ Failed to confirm DSTV payment");
+            axum::Json(DstvConfirmPaymentResponse {
+                success: false,
+                raw_xml: None,
+                message: Some("DSTV payment confirmation failed".to_string()),
+            })
+            .into_response()
+        }
+    }
+}
 
 async fn initiate_payment(Json(payload): Json<PaymentInitRequest>) -> impl IntoResponse {
     let merchant_tx_id = format!("TXN-{}", Uuid::new_v4());
@@ -59,16 +101,15 @@ async fn lookup_handler(Json(payload): Json<DstvLookupRequest>) -> impl IntoResp
             customer_id: None,
             message: "Lookup failed".to_string(),
             success: false,
+            custom_fields: None,
         })
         .into_response(),
     }
 }
 
-
-
-
-pub async fn requery_handler(axum::extract::Path(merchant_tx_id): axum::extract::Path<String>) -> impl IntoResponse
- {
+pub async fn requery_handler(
+    axum::extract::Path(merchant_tx_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
     match requery_transaction(merchant_tx_id).await {
         Ok(response) => Json(response).into_response(),
         Err(_) => Json(BluecodeStatusResponseWrapper {
@@ -77,6 +118,7 @@ pub async fn requery_handler(axum::extract::Path(merchant_tx_id): axum::extract:
                 state: "UNKNOWN".into(),
                 merchant_tx_id: "".into(),
             },
-        }).into_response(),
+        })
+        .into_response(),
     }
 }

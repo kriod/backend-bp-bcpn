@@ -1,4 +1,6 @@
-use crate::models::bluecode::{BluecodeRegisterRequest, BluecodeRegisterResponse, BluecodeRegisterResponseWrapper};
+use crate::models::bluecode::{
+    BluecodeRegisterRequest, BluecodeRegisterResponse, BluecodeRegisterResponseWrapper,
+};
 use crate::models::bluecode::{BluecodeStatusRequest, BluecodeStatusResponseWrapper};
 use crate::utils::error::ApiError;
 use reqwest::Client;
@@ -53,8 +55,9 @@ pub async fn initiate_qr_payment(
     }
 }
 
-
-pub async fn requery_transaction(merchant_tx_id: String) -> Result<BluecodeStatusResponseWrapper, ApiError> {
+pub async fn requery_transaction(
+    merchant_tx_id: String,
+) -> Result<BluecodeStatusResponseWrapper, ApiError> {
     let client = Client::new();
     let base_url = env::var("BLUECODE_API_BASE_URL")
         .unwrap_or_else(|_| "https://merchant-api.acq.int.bluecode.ng".to_string());

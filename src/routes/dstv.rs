@@ -5,7 +5,7 @@ use crate::models::bluecode::{
 use crate::models::bluecode::{BluecodeStatusResponse, BluecodeStatusResponseWrapper};
 use crate::models::dstv::{DstvConfirmPaymentRequest, DstvLookupRequest, DstvLookupResponse};
 use crate::services::bluecode::{initiate_qr_payment, requery_transaction};
-use crate::services::dstv::{confirm_dstv_payment, lookup_dstv_account};
+use crate::services::dstv::{confirm_dstv_payment, lookup_dstv_account, retry_dstv_confirmation};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -27,6 +27,7 @@ pub fn dstv_routes(pool: PgPool) -> Router<PgPool> {
         .route("/initiate-payment", post(initiate_payment))
         .route("/requery/{merchant_tx_id}", get(requery_handler))
         .route("/confirm-payment", post(confirm_payment_handler))
+        .route("/retry-confirm", post(retry_dstv_confirmation))
         .with_state(pool)
 }
 
@@ -45,7 +46,17 @@ pub async fn confirm_payment_handler(
     .await
     {
         Ok(xml_response) => {
+            tracing::debug!("Raw XML body: {}", xml_response);
+
             tracing::info!("✅ DSTV confirmation success");
+
+            tracing::info!("📄 Raw XML response:\n{}", xml_response);
+            tracing::info!(
+                "📄 Raw XML response ({} bytes):\n{}",
+                xml_response.len(),
+                xml_response
+            );
+
             axum::Json(DstvConfirmPaymentResponse {
                 success: true,
                 raw_xml: Some(xml_response),

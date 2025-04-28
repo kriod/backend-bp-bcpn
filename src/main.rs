@@ -1,6 +1,6 @@
 use axum::http::{header, Method};
 use axum::Router;
-use bills_backend::routes::airtime::airtime_routes;
+
 use bills_backend::routes::bluecode::bluecode_routes;
 use bills_backend::routes::dstv::dstv_routes;
 use bills_backend::routes::transactions::transaction_routes;

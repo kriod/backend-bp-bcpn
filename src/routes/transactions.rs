@@ -16,7 +16,7 @@ async fn get_transactions(
     let rows = sqlx::query_as!(
         Transaction,
         r#"
-        SELECT id, merchant_reference, amount, customer_id, basket_id, status, timestamp
+        SELECT id, merchant_reference, customer_id, basket_id, amount, qr_status, confirm_status, timestamp, user_id
         FROM transactions
         ORDER BY timestamp DESC
         "#
@@ -30,22 +30,25 @@ async fn get_transactions(
 
 async fn store_transaction(
     State(pool): State<PgPool>,
-    Json(payload): Json<NewTransaction>,
+    Json(new_tx): Json<NewTransaction>,
 ) -> Result<Json<Transaction>, (axum::http::StatusCode, String)> {
-    info!("📥 Saving transaction: {:?}", payload);
+    info!("📥 Saving transaction: {:?}", new_tx);
+
     let result = sqlx::query_as!(
         Transaction,
         r#"
-        INSERT INTO transactions (merchant_reference, amount, customer_id, basket_id, status, timestamp)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, merchant_reference, amount, customer_id, basket_id, status, timestamp
+        INSERT INTO transactions (merchant_reference, customer_id, basket_id, amount, qr_status, confirm_status, timestamp, user_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, merchant_reference, customer_id, basket_id, amount, qr_status, confirm_status, timestamp, user_id
         "#,
-        payload.merchant_reference,
-        payload.amount,
-        payload.customer_id,
-        payload.basket_id,
-        payload.status,
-        payload.timestamp
+        new_tx.merchant_reference,
+        new_tx.customer_id,
+        new_tx.basket_id,
+        new_tx.amount,
+        new_tx.qr_status,
+        new_tx.confirm_status,
+        new_tx.timestamp,
+        new_tx.user_id,
     )
     .fetch_one(&pool)
     .await

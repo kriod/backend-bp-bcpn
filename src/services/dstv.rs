@@ -1,12 +1,12 @@
 use crate::models::dstv::{DstvLookupRequest, DstvLookupResponse};
 use crate::utils::error::ApiError;
+use anyhow::{Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 use quick_xml::de::from_str;
+use quick_xml::se::to_string;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use anyhow::{Context, Result};
-use quick_xml::se::to_string;
 
 #[derive(Serialize)]
 #[serde(rename = "PayUVasRequest")]
@@ -36,7 +36,6 @@ struct CustomField<'a> {
     #[serde(rename = "@Value")]
     value: &'a str,
 }
-
 pub async fn confirm_dstv_payment(
     merchant_reference: String,
     customer_id: String,
@@ -50,7 +49,7 @@ pub async fn confirm_dstv_payment(
         TransactionType: "SINGLE",
         VasId: "MCA_ACCOUNT_SQ_NG",
         CountryCode: "NG",
-        AmountInCents: amount,
+        AmountInCents: 40000,
         CustomerId: &customer_id,
         CustomFields: CustomFields {
             field: vec![CustomField {
@@ -60,32 +59,109 @@ pub async fn confirm_dstv_payment(
         },
     };
 
-    let xml = to_string(&xml_payload).context("Failed to serialize XML")?;
-    let client = Client::new();
+    let xml_string = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>{}"#,
+        to_string(&xml_payload).context("Failed to serialize XML")?
+    );
 
-    let response_result = client
-        .post("https://mcapi-server.herokuapp.com/Vendor/SinglePayment")
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(xml)
+    tracing::info!("📤 Final XML body:\n{}", xml_string);
+
+    let client = Client::new();
+    let auth = format!(
+        "Basic {}",
+        general_purpose::STANDARD.encode("test:NeRWNtWQMS")
+    );
+
+    let encoded = [("xml", xml_string.clone())];
+
+    let res = client
+        .post("https://mcapi-demo.herokuapp.com/vendor/singlepayment") // lowercase like curl
+        .header("Content-Type", "application/x-www-form-urlencoded") // explicit content-type
+        .header("Authorization", auth)
+        .form(&encoded)
         .send()
         .await;
 
-    match response_result {
+    match res {
         Ok(res) => {
+            let status = res.status();
             let text = res.text().await.unwrap_or_default();
-            Ok(text)
+
+            tracing::info!("📡 HTTP Status: {}", status);
+            tracing::info!("📨 Raw XML from Multichoice:\n{}", text);
+
+            if status.is_success() && !text.trim().is_empty() {
+                Ok(text)
+            } else {
+                tracing::warn!(
+                    "❌ Confirmation failed. Status: {} - Body: {}",
+                    status,
+                    text
+                );
+                tracing::warn!("🔁 Falling back to requery...");
+                requery_dstv_confirmation(&merchant_reference).await
+            }
         }
-        Err(_) => {
-            tracing::warn!("🛑 Initial confirmation failed, falling back to requery");
+        Err(err) => {
+            tracing::error!("❌ HTTP Request failed: {:?}", err);
+            tracing::warn!("🔁 Falling back to requery due to network error...");
             requery_dstv_confirmation(&merchant_reference).await
         }
     }
 }
 
+use crate::models::dstv::DstvConfirmPaymentRequest;
+use axum::{extract::State, Json};
+use sqlx::PgPool;
+
+pub async fn retry_dstv_confirmation(
+    State(_pool): State<PgPool>, // You can extend this if DB is needed
+    Json(body): Json<DstvConfirmPaymentRequest>,
+) -> impl axum::response::IntoResponse {
+    tracing::info!("🔁 Manual retry DSTV payment with: {:?}", body);
+
+    match confirm_dstv_payment(
+        body.merchant_reference.clone(),
+        body.customer_id.clone(),
+        body.basket_id.clone(),
+        body.amount,
+    )
+    .await
+    {
+        Ok(xml_response) => {
+            tracing::info!("✅ Manual retry success: {}", xml_response);
+            Json({
+                serde_json::json!({
+                    "success": true,
+                    "message": "Manual confirmation sent.",
+                    "raw_xml": xml_response
+                })
+            })
+        }
+        Err(err) => {
+            tracing::error!("❌ Manual retry failed: {:?}", err);
+            Json({
+                serde_json::json!({
+                    "success": false,
+                    "message": "Manual retry failed."
+                })
+            })
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RequeryItem {
+    merchantreference: String,
+    smartcard: String,
+    status: i32,
+    basketid: String,
+}
+
 async fn requery_dstv_confirmation(reference: &str) -> Result<String> {
     let client = Client::new();
     let url = format!(
-        "https://mcapi-server.herokuapp.com/Transactions/Single/{}",
+        "https://mcapi-demo.herokuapp.com/transactions/single/{}",
         reference
     );
 
@@ -103,25 +179,31 @@ async fn requery_dstv_confirmation(reference: &str) -> Result<String> {
         .text()
         .await?;
 
-    #[derive(Debug, Deserialize)]
-    struct PayUVasResponse {
-        #[serde(rename = "ResultCode")]
-        result_code: String,
-        #[serde(rename = "ResultMessage")]
-        result_message: String,
+    tracing::info!("📥 Raw requery response: {}", response);
+
+    if response.trim().is_empty() {
+        tracing::error!("❌ Requery response was empty");
+        return Err(anyhow::anyhow!("Empty requery response"));
     }
 
-    let parsed: PayUVasResponse = from_str(&response).context("Failed to parse requery XML")?;
+    let items: Vec<RequeryItem> =
+        serde_json::from_str(&response).context("Failed to parse requery JSON")?;
 
-    tracing::info!(?parsed, "📥 Requery DSTV result");
+    if let Some(item) = items.first() {
+        tracing::info!("✅ Requery result: {:?}", item);
 
-    if parsed.result_code == "00" {
-        Ok(response) // success ✅
+        if item.status == 0 {
+            Ok(response)
+        } else {
+            Err(anyhow::anyhow!(
+                "Requery returned failed status: {}",
+                item.status
+            ))
+        }
     } else {
-        Err(ApiError::InternalServerError.into())
+        Err(anyhow::anyhow!("Requery returned empty array"))
     }
 }
-
 
 pub async fn lookup_dstv_account(req: DstvLookupRequest) -> Result<DstvLookupResponse, ApiError> {
     let client = Client::new();
@@ -155,6 +237,11 @@ pub async fn lookup_dstv_account(req: DstvLookupRequest) -> Result<DstvLookupRes
         .await?
         .text()
         .await?;
+
+    if response.trim().is_empty() {
+        tracing::warn!("Requery response is empty – likely a backend outage or invalid request");
+        return Err(ApiError::InternalServerError.into());
+    }
 
     println!("💬 DSTV API Raw XML Response:\n{}", response);
 
@@ -221,8 +308,6 @@ pub struct SinglePaymentRequest {
     pub merchant_reference: String,
 }
 
-
-
 pub async fn pay_dstv_bill(req: SinglePaymentRequest) -> Result<String, ApiError> {
     let client = Client::new();
     let url = std::env::var("DSTV_PAYMENT_URL")
@@ -242,6 +327,9 @@ pub async fn pay_dstv_bill(req: SinglePaymentRequest) -> Result<String, ApiError
         req.merchant_reference, req.customer_id, req.amount, req.product_code
     );
 
+    use std::fs;
+    fs::write("debug_outgoing.xml", &xml).unwrap();
+
     let encoded = [("xml", xml)];
 
     let auth = format!(
@@ -252,6 +340,7 @@ pub async fn pay_dstv_bill(req: SinglePaymentRequest) -> Result<String, ApiError
     let response = client
         .post(url)
         .header("Authorization", auth)
+        .header("Content-Type", "application/x-www-form-urlencoded")
         .form(&encoded)
         .send()
         .await?

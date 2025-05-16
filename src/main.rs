@@ -4,6 +4,7 @@ use axum::Router;
 use bills_backend::routes::bluecode::bluecode_routes;
 use bills_backend::routes::dstv::dstv_routes;
 use bills_backend::routes::transactions::transaction_routes;
+
 use dotenvy::dotenv;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::net::SocketAddr;
@@ -33,7 +34,7 @@ async fn main() {
     let app = Router::<PgPool>::new()
         .nest("/dstv", dstv_routes(pool.clone()))
         .nest("/bluecode", bluecode_routes(pool.clone()))
-        .nest("/transactions", transaction_routes(pool.clone()))
+        .nest("/transactions", transaction_routes())
         .layer(cors)
         .with_state(pool); // 👈 attaches the PgPool to all routes
 

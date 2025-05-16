@@ -1,15 +1,20 @@
-use crate::models::transactions::{NewTransaction, Transaction};
-use axum::{extract::State, routing::get, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
 use sqlx::PgPool;
 use tracing::info;
-use wiremock::matchers::path;
 
-pub fn transaction_routes(pool: PgPool) -> Router<PgPool> {
+use crate::models::transactions::{NewTransaction, Transaction};
+
+pub fn transaction_routes() -> Router<PgPool> {
     Router::new()
         .route("/", post(store_transaction))
         .route("/", get(get_transactions))
 }
 
+// GET /transactions
 async fn get_transactions(
     State(pool): State<PgPool>,
 ) -> Result<Json<Vec<Transaction>>, (axum::http::StatusCode, String)> {
@@ -23,18 +28,19 @@ async fn get_transactions(
     )
     .fetch_all(&pool)
     .await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(internal_error)?;
 
     Ok(Json(rows))
 }
 
+// POST /transactions
 async fn store_transaction(
     State(pool): State<PgPool>,
     Json(new_tx): Json<NewTransaction>,
 ) -> Result<Json<Transaction>, (axum::http::StatusCode, String)> {
     info!("📥 Saving transaction: {:?}", new_tx);
 
-    let result = sqlx::query_as!(
+    let inserted = sqlx::query_as!(
         Transaction,
         r#"
         INSERT INTO transactions (merchant_reference, customer_id, basket_id, amount, qr_status, confirm_status, timestamp, user_id)
@@ -52,7 +58,17 @@ async fn store_transaction(
     )
     .fetch_one(&pool)
     .await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(internal_error)?;
 
-    Ok(Json(result))
+    Ok(Json(inserted))
+}
+
+fn internal_error<E>(err: E) -> (axum::http::StatusCode, String)
+where
+    E: std::fmt::Display,
+{
+    (
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        err.to_string(),
+    )
 }

@@ -191,10 +191,14 @@ async fn requery_dstv_confirmation(reference: &str) -> Result<String> {
 
     if let Some(item) = items.first() {
         tracing::info!("✅ Requery result: {:?}", item);
-
-        if item.status == 0 {
+        if item.status == 1 {
+            // ✅ Success
             Ok(response)
+        } else if item.status == -1 {
+            // ⏳ Pending, but not a hard failure
+            Err(anyhow::anyhow!("Transaction is still pending"))
         } else {
+            // ❌ Failure
             Err(anyhow::anyhow!(
                 "Requery returned failed status: {}",
                 item.status

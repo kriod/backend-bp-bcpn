@@ -7,6 +7,7 @@ use quick_xml::se::to_string;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 
 #[derive(Serialize)]
 #[serde(rename = "PayUVasRequest")]
@@ -36,6 +37,16 @@ struct CustomField<'a> {
     #[serde(rename = "@Value")]
     value: &'a str,
 }
+
+fn get_dstv_auth() -> String {
+    std::env::var("DSTV_AUTH").unwrap_or_else(|_| {
+        format!(
+            "Basic {}",
+            general_purpose::STANDARD.encode("test:NeRWNtWQMS")
+        )
+    })
+}
+
 pub async fn confirm_dstv_payment(
     merchant_reference: String,
     customer_id: String,
@@ -44,12 +55,12 @@ pub async fn confirm_dstv_payment(
 ) -> Result<String> {
     let xml_payload = PayUVasRequest {
         version: "1.0",
-        MerchantId: "test",
+        MerchantId: "Bluecode",
         MerchantReference: &merchant_reference,
         TransactionType: "SINGLE",
         VasId: "MCA_ACCOUNT_SQ_NG",
         CountryCode: "NG",
-        AmountInCents: 40000,
+        AmountInCents: amount / 100,
         CustomerId: &customer_id,
         CustomFields: CustomFields {
             field: vec![CustomField {
@@ -67,15 +78,16 @@ pub async fn confirm_dstv_payment(
     tracing::info!("📤 Final XML body:\n{}", xml_string);
 
     let client = Client::new();
-    let auth = format!(
-        "Basic {}",
-        general_purpose::STANDARD.encode("test:NeRWNtWQMS")
-    );
+    let auth = get_dstv_auth();
 
     let encoded = [("xml", xml_string.clone())];
 
+    let base_url = std::env::var("DSTV_BASE_URL")
+        .unwrap_or_else(|_| "https://mcapi-demo.herokuapp.com".to_string());
+    let url = format!("{}/vendor/singlepayment", base_url);
+
     let res = client
-        .post("https://mcapi-demo.herokuapp.com/vendor/singlepayment") // lowercase like curl
+        .post(&url) // lowercase like curl
         .header("Content-Type", "application/x-www-form-urlencoded") // explicit content-type
         .header("Authorization", auth)
         .form(&encoded)
@@ -160,16 +172,12 @@ struct RequeryItem {
 
 async fn requery_dstv_confirmation(reference: &str) -> Result<String> {
     let client = Client::new();
-    let url = format!(
-        "https://mcapi-demo.herokuapp.com/transactions/single/{}",
-        reference
-    );
+    let base_url = std::env::var("DSTV_BASE_URL")
+        .unwrap_or_else(|_| "https://mcapi-demo.herokuapp.com".to_string());
+    let url = format!("{}/transactions/single/{}", base_url, reference);
+    //let url = format!("https://mcapi-demo.herokuapp.com/transactions/single/{}",reference);
 
-    let auth = format!(
-        "Basic {}",
-        general_purpose::STANDARD.encode("test:NeRWNtWQMS")
-    );
-
+    let auth = get_dstv_auth();
     let response = client
         .get(&url)
         .header("Authorization", auth)
@@ -211,27 +219,32 @@ async fn requery_dstv_confirmation(reference: &str) -> Result<String> {
 
 pub async fn lookup_dstv_account(req: DstvLookupRequest) -> Result<DstvLookupResponse, ApiError> {
     let client = Client::new();
-    let url = std::env::var("DSTV_LOOKUP_URL")
-        .unwrap_or_else(|_| "https://mcapi-demo.herokuapp.com/vendor/lookup".to_string());
+    let merchant_id = std::env::var("DSTV_MERCHANT_ID").unwrap_or_else(|_| "test".to_string());
+    let base_url = std::env::var("DSTV_BASE_URL")
+        .unwrap_or_else(|_| "https://mcapi-demo.herokuapp.com".to_string());
+    let url = format!("{}/vendor/lookup", base_url);
+
+    //let url = std::env::var("DSTV_LOOKUP_URL").unwrap_or_else(|_| "https://mcapi-demo.herokuapp.com/vendor/lookup".to_string());
 
     let xml = format!(
         r#"<PayUVasRequest>
-            <MerchantId>test</MerchantId>
-            <MerchantReference>ref-123</MerchantReference>
+            <MerchantId>{}</MerchantId>
+            <MerchantReference>ref-334592934</MerchantReference>
             <TransactionType>ACCOUNT_LOOKUP</TransactionType>
             <VasId>MCA_ACCOUNT_SQ_NG</VasId>
             <CountryCode>NG</CountryCode>
             <CustomerId>{}</CustomerId>
         </PayUVasRequest>"#,
-        req.customer_id
+        merchant_id, req.customer_id
     );
+
+    tracing::info!("🧾  URL: {}", url);
+    tracing::info!("🧾 Merchant ID: {}", merchant_id);
+    tracing::info!("🧾 XML: {}", xml);
 
     let encoded = [("xml", xml)];
 
-    let auth = format!(
-        "Basic {}",
-        general_purpose::STANDARD.encode("test:NeRWNtWQMS")
-    );
+    let auth = get_dstv_auth();
 
     let response = client
         .post(url)
@@ -314,12 +327,16 @@ pub struct SinglePaymentRequest {
 
 pub async fn pay_dstv_bill(req: SinglePaymentRequest) -> Result<String, ApiError> {
     let client = Client::new();
-    let url = std::env::var("DSTV_PAYMENT_URL")
-        .unwrap_or_else(|_| "https://mcapi-demo.herokuapp.com/vendor/singlepayment".to_string());
+    let merchant_id = std::env::var("DSTV_MERCHANT_ID").unwrap_or_else(|_| "test".to_string());
+
+    let base_url =
+        env::var("DSTV_BASE_URL").map_err(|_| ApiError::EnvVarMissing("DSTV_BASE_URL".into()))?;
+    let url = format!("{}/vendor/singlepayment", base_url);
+    //let url = std::env::var("DSTV_PAYMENT_URL").unwrap_or_else(|_| "https://mcapi-demo.herokuapp.com/vendor/singlepayment".to_string());
 
     let xml = format!(
         r#"<PayUVasRequest>
-            <MerchantId>test</MerchantId>
+            <MerchantId>{}</MerchantId>
             <MerchantReference>{}</MerchantReference>
             <TransactionType>SINGLE_PAYMENT</TransactionType>
             <VasId>MCA_ACCOUNT_SQ_NG</VasId>
@@ -328,7 +345,7 @@ pub async fn pay_dstv_bill(req: SinglePaymentRequest) -> Result<String, ApiError
             <Amount>{}</Amount>
             <ProductCode>{}</ProductCode>
         </PayUVasRequest>"#,
-        req.merchant_reference, req.customer_id, req.amount, req.product_code
+        merchant_id, req.merchant_reference, req.customer_id, req.amount, req.product_code
     );
 
     use std::fs;
@@ -336,10 +353,7 @@ pub async fn pay_dstv_bill(req: SinglePaymentRequest) -> Result<String, ApiError
 
     let encoded = [("xml", xml)];
 
-    let auth = format!(
-        "Basic {}",
-        general_purpose::STANDARD.encode("test:NeRWNtWQMS")
-    );
+    let auth = get_dstv_auth();
 
     let response = client
         .post(url)
